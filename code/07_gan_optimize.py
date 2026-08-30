@@ -20,9 +20,6 @@ from sklearn.preprocessing import StandardScaler
 from torch import nn
 
 
-# ============================================================
-# 1. Paths / global settings
-# ============================================================
 
 RESULTS_DIR = Path("results")
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -85,9 +82,6 @@ TARGET_CORR_MAE = 0.15
 IDEAL_CORR_MAE = 0.10
 
 
-# ============================================================
-# 2. Reproducibility helpers
-# ============================================================
 
 def set_training_seed(seed: int) -> None:
     random.seed(seed)
@@ -99,9 +93,6 @@ def format_counts(x: np.ndarray) -> str:
     return ",".join(str(int(v)) for v in x)
 
 
-# ============================================================
-# 3. Load and freeze the 276-row normalized real dataset
-# ============================================================
 
 df = pd.read_excel(INPUT_PATH)
 
@@ -125,21 +116,15 @@ print("Dimensions:", X.shape[1])
 print("Min / Max:", float(X.min()), float(X.max()))
 
 
-# ============================================================
-# 4. Standardized analysis / GAN representation
 #
 # The paper mentions feature standardization, and its Fig.2(b)/Fig.3(c)
 # contain negative values. The real 276 rows remain unchanged; this is
 # only the internal representation used for GAN/K-means/plots.
-# ============================================================
 
 standard_scaler = StandardScaler()
 X_std = standard_scaler.fit_transform(X).astype(np.float32)
 
 
-# ============================================================
-# 5. Freeze the paper-oriented K-means original baseline
-# ============================================================
 
 kmeans = KMeans(
     n_clusters=N_CLUSTERS,
@@ -175,9 +160,6 @@ print("Paper counts:", PAPER_ORIGINAL_COUNTS)
 print("Difference:", real_paper_counts - PAPER_ORIGINAL_COUNTS)
 
 
-# ============================================================
-# 6. Legal values for discrete columns
-# ============================================================
 
 LEGAL_VALUES = {
     feature: np.sort(df[feature].astype(float).unique())
@@ -198,9 +180,6 @@ def postprocess_from_standardized(synthetic_std: np.ndarray) -> np.ndarray:
     return synthetic
 
 
-# ============================================================
-# 7. Reference statistics / nearest-neighbor model
-# ============================================================
 
 real_corr = pd.DataFrame(X, columns=FEATURES).corr(method="spearman").to_numpy()
 upper_triangle = np.triu_indices(len(FEATURES), k=1)
@@ -214,9 +193,6 @@ real_rows_rounded = {
 }
 
 
-# ============================================================
-# 8. GAN quality metrics
-# ============================================================
 
 def evaluate_synthetic(synthetic: np.ndarray) -> dict:
     synthetic = np.asarray(synthetic, dtype=np.float32)
@@ -298,12 +274,9 @@ def evaluate_synthetic(synthetic: np.ndarray) -> dict:
     }
 
 
-# ============================================================
-# 9. GAN architecture
 #
 # Unconditional: G(z), not G(z,c).
 # Objective: BCE adversarial loss.
-# ============================================================
 
 class Generator(nn.Module):
     def __init__(self, latent_dim: int, hidden_dims: tuple[int, ...]):
@@ -359,14 +332,11 @@ class Discriminator(nn.Module):
         return self.network(x)
 
 
-# ============================================================
-# 10. Candidate configurations
 #
 # baseline: close to the previous version
 # sn_shallow: spectral-normalized D
 # sn_deep: deeper G + spectral-normalized D + large batch
 # sn_deep_strong_d: neighboring learning-rate check
-# ============================================================
 
 if QUICK_MODE:
     CONFIGS = {
@@ -444,12 +414,9 @@ else:
     EVAL_POOL_SIZE = 5000
 
 
-# ============================================================
-# 11. Training function
 #
 # IMPORTANT: evaluation uses a separate torch.Generator so it never
 # perturbs the training RNG stream.
-# ============================================================
 
 def train_one(
     config_name: str,
@@ -491,10 +458,8 @@ def train_one(
     states = {}
 
     for step in range(1, max_steps + 1):
-        # -----------------------------
         # Random real minibatch.
         # No K-means balancing is used.
-        # -----------------------------
         indices = torch.tensor(
             np_rng.integers(0, len(real_tensor), size=batch_size),
             dtype=torch.long,
@@ -506,9 +471,7 @@ def train_one(
             * max(0.0, 1.0 - step / max_steps)
         )
 
-        # -----------------------------
         # Train D
-        # -----------------------------
         fake_detached = generator(torch.randn(
             batch_size,
             config["latent_dim"],
@@ -535,9 +498,7 @@ def train_one(
         d_loss.backward()
         optimizer_d.step()
 
-        # -----------------------------
         # Train G
-        # -----------------------------
         fake = generator(torch.randn(
             batch_size,
             config["latent_dim"],
@@ -553,9 +514,7 @@ def train_one(
         g_loss.backward()
         optimizer_g.step()
 
-        # -----------------------------
         # Synthetic-only checkpoint evaluation
-        # -----------------------------
         if step in CHECKPOINTS:
             generator.eval()
 
@@ -619,9 +578,6 @@ def train_one(
     return rows, states
 
 
-# ============================================================
-# 12. Run multi-seed tuning
-# ============================================================
 
 all_rows = []
 all_states = {}
@@ -652,9 +608,6 @@ tuning_df.to_excel(
 )
 
 
-# ============================================================
-# 13. Robust config/checkpoint selection across seeds
-# ============================================================
 
 valid_df = tuning_df[tuning_df["hard_valid"]].copy()
 
@@ -733,9 +686,6 @@ print("Multi-seed mean CorrMAE:", float(best["mean_corr_mae"]))
 print("Representative seed:", representative_seed)
 
 
-# ============================================================
-# 14. Restore selected representative model
-# ============================================================
 
 final_generator = Generator(
     latent_dim=best_config["latent_dim"],
@@ -766,9 +716,6 @@ torch.save(
 )
 
 
-# ============================================================
-# 15. Large natural candidate pool for final GAN validation
-# ============================================================
 
 FINAL_POOL_SIZE = 3000 if QUICK_MODE else 30000
 pool_rng = torch.Generator().manual_seed(POOL_GENERATION_SEED)
@@ -797,14 +744,11 @@ print("Exact duplicates:", pool_metrics["exact_duplicates"])
 print("Invalid:", pool_metrics["invalid"])
 
 
-# ============================================================
-# 16. Natural 72
 #
 # We do NOT force per-cluster counts.
 # We only require hard validity + 6/6 coverage.
 # The first generation seed that passes is accepted; we do NOT choose
 # the set with the prettiest KS/Corr values.
-# ============================================================
 
 natural_72 = None
 natural_seed = None
@@ -863,8 +807,6 @@ print("CorrMAE:", natural_metrics["corr_mae"])
 print("Exact duplicates:", natural_metrics["exact_duplicates"])
 
 
-# ============================================================
-# 17. Soft-balanced 72
 #
 # This is NOT forced 12-per-cluster sampling.
 # Target mixture = alpha * empirical real proportions
@@ -874,7 +816,6 @@ print("Exact duplicates:", natural_metrics["exact_duplicates"])
 # rare modes receive a modest boost, which is consistent with the
 # augmentation intent of the paper without reproducing its bar chart by
 # construction.
-# ============================================================
 
 pool_raw_labels = kmeans.predict(
     standard_scaler.transform(pool)
@@ -939,9 +880,6 @@ print("CorrMAE:", soft_metrics["corr_mae"])
 print("Exact duplicates:", soft_metrics["exact_duplicates"])
 
 
-# ============================================================
-# 18. Save synthetic datasets
-# ============================================================
 
 def make_output_df(data, paper_labels, source_name):
     out = pd.DataFrame(data, columns=FEATURES)
@@ -998,9 +936,6 @@ pd.concat([
 )
 
 
-# ============================================================
-# 19. Per-feature diagnostic tables
-# ============================================================
 
 def per_feature_table(synthetic, label):
     rows = []
@@ -1033,9 +968,6 @@ per_feature.to_excel(
 )
 
 
-# ============================================================
-# 20. Summary workbook
-# ============================================================
 
 pool_summary = pd.DataFrame({
     "metric": [
@@ -1103,9 +1035,6 @@ with pd.ExcelWriter(RESULTS_DIR / "07_validation_summary.xlsx") as writer:
     per_feature.to_excel(writer, sheet_name="per_feature", index=False)
 
 
-# ============================================================
-# 21. Plot helpers
-# ============================================================
 
 real_plot_std = standard_scaler.transform(X)
 natural_plot_std = standard_scaler.transform(natural_72)
@@ -1254,13 +1183,10 @@ def plot_joint_tsne(synthetic_std, title, path):
     plt.close(fig)
 
 
-# ============================================================
-# 22. Main paper-style figures
 #
 # The soft-balanced set is used for the main paper-oriented four figures.
 # Natural-only figures are also saved so the GAN itself can be assessed
 # without the soft balancing step.
-# ============================================================
 
 plot_histogram(
     soft_plot_std,
@@ -1333,9 +1259,6 @@ plot_joint_tsne(
 )
 
 
-# ============================================================
-# 23. Final textual assessment
-# ============================================================
 
 print()
 print("=" * 80)
