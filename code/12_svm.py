@@ -1,0 +1,219 @@
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from matplotlib.lines import Line2D
+from matplotlib.patches import FancyBboxPatch
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.svm import SVR
+
+
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.serif"] = ["Times New Roman", "DejaVu Serif"]
+
+project_dir = Path(__file__).resolve().parent.parent
+results_dir = project_dir / "results"
+
+train_path = results_dir / "08_train_final.xlsx"
+val_path = results_dir / "08_validation_final.xlsx"
+
+features = [
+    "a", "b", "c", "V",
+    "concentration",
+    "Layer",
+    "valence_electron",
+    "IQE",
+]
+
+train_df = pd.read_excel(train_path)
+val_df = pd.read_excel(val_path)
+
+X_train = train_df[features].to_numpy(dtype=float)
+y_train = train_df["Lifetime"].to_numpy(dtype=float)
+
+X_val = val_df[features].to_numpy(dtype=float)
+y_val = val_df["Lifetime"].to_numpy(dtype=float)
+
+
+PAPER_R2 = 0.19446
+
+output_dir = results_dir / "12_2_SVM"
+output_dir.mkdir(exist_ok=True)
+
+def evaluate(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+
+    mask = y_true != 0
+    mape = np.mean(np.abs((y_pred[mask] - y_true[mask]) / y_true[mask]))
+
+    return {
+        "MAE": mae,
+        "MSE": mse,
+        "MAPE": mape,
+        "RMSE": rmse,
+        "R2": r2,
+    }
+
+
+def plot_result(y_true, y_pred, save_path, border_color, panel_label):
+    fig, ax = plt.subplots(figsize=(6.3, 5.2))
+
+    scatter = ax.scatter(
+        y_true,
+        y_pred,
+        c=y_true,
+        cmap="RdYlGn",
+        s=26,
+        edgecolors="none",
+    )
+
+    slope, intercept = np.polyfit(y_true, y_pred, 1)
+    x_line = np.linspace(y_true.min(), y_true.max(), 300)
+    ax.plot(
+        x_line,
+        slope * x_line + intercept,
+        color="#5F6B73",
+        linewidth=1.6,
+    )
+
+    r2 = r2_score(y_true, y_pred)
+    sign = "+" if intercept >= 0 else "-"
+
+    ax.text(
+        0.05,
+        0.95,
+        f"Num = {len(y_true)}\n"
+        f"y = {slope:.3f}x {sign} {abs(intercept):.3f}\n"
+        f"R$^2$ = {r2:.5f}",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=10,
+    )
+
+    ax.set_xlabel("true data")
+    ax.set_ylabel("predicted data")
+    ax.tick_params(direction="in", top=True, right=True)
+    ax.grid(alpha=0.25)
+
+    inset = ax.inset_axes([0.59, 0.20, 0.29, 0.23])
+    sample = np.arange(1, len(y_true) + 1)
+    inset.plot(sample, y_true, "--", linewidth=0.8, label="True value")
+    inset.plot(sample, y_pred, linewidth=0.8, label="Fit value")
+    inset.tick_params(labelsize=6, direction="in")
+    inset.legend(fontsize=5, frameon=False, loc="upper right")
+
+    handles = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            linestyle="None",
+            markerfacecolor="#B0002B",
+            markeredgecolor="#B0002B",
+            markersize=6,
+            label="true-predict data",
+        ),
+        Line2D(
+            [0], [0],
+            color="#5F6B73",
+            linewidth=1.6,
+            label="Fit data",
+        ),
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="lower right",
+        fontsize=9,
+        frameon=True,
+        fancybox=False,
+        edgecolor="black",
+    )
+
+    cbar = fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.025)
+    cbar.set_ticks([
+        y_true.max(),
+        (y_true.max() + y_true.min()) / 2,
+        y_true.min(),
+    ])
+    cbar.set_ticklabels(["H", "M", "L"])
+
+    border = FancyBboxPatch(
+        (-0.12, -0.13),
+        1.25,
+        1.22,
+        transform=ax.transAxes,
+        boxstyle="round,pad=0.02,rounding_size=0.08",
+        fill=False,
+        edgecolor=border_color,
+        linewidth=2,
+        linestyle=(0, (5, 4)),
+        clip_on=False,
+    )
+    ax.add_patch(border)
+
+    ax.text(
+        -0.19,
+        1.07,
+        panel_label,
+        transform=ax.transAxes,
+        fontsize=29,
+        fontweight="bold",
+        family="serif",
+    )
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
+records = []
+models = []
+
+for C in [0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0]:
+    for epsilon in [0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3]:
+        for gamma in [0.1, 0.2, 0.3, 0.5, 0.75, 1.0]:
+            model = SVR(kernel="rbf", C=C, epsilon=epsilon, gamma=gamma)
+            model.fit(X_train, y_train)
+            pred = model.predict(X_val)
+            metrics = evaluate(y_val, pred)
+            records.append({"C": C, "epsilon": epsilon, "gamma": gamma, **metrics})
+            models.append(model)
+
+tuning = pd.DataFrame(records)
+best_index = tuning["RMSE"].idxmin()
+
+best_model = models[best_index]
+pred = best_model.predict(X_val)
+metrics = evaluate(y_val, pred)
+
+result = pd.DataFrame([{
+    "Model": "SVM",
+    "C": tuning.loc[best_index, "C"],
+    "epsilon": tuning.loc[best_index, "epsilon"],
+    "gamma": tuning.loc[best_index, "gamma"],
+    **metrics,
+    "Paper_R2": PAPER_R2,
+    "R2_Difference": metrics["R2"] - PAPER_R2,
+}])
+
+print()
+print(result.to_string(index=False))
+print(f"\nPaper R2 = {PAPER_R2:.5f}")
+print(f"R2 difference = {metrics['R2'] - PAPER_R2:+.5f}")
+
+result.to_excel(output_dir / "12_2_SVM_metrics.xlsx", index=False)
+tuning.sort_values("RMSE").to_excel(output_dir / "12_2_SVM_tuning.xlsx", index=False)
+
+prediction_df = val_df.copy()
+prediction_df["Pred_SVM"] = pred
+prediction_df.to_excel(output_dir / "12_2_SVM_predictions.xlsx", index=False)
+
+joblib.dump(best_model, output_dir / "12_2_SVM.joblib")
+
+plot_result(y_val, pred, output_dir / "12_2_SVM.png", "#8E44AD", "b")

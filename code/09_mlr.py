@@ -1,0 +1,198 @@
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from matplotlib.lines import Line2D
+from matplotlib.patches import FancyBboxPatch
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+
+project_dir = Path(__file__).resolve().parent.parent
+results_dir = project_dir / "results"
+
+train_path = results_dir / "08_train_final.xlsx"
+val_path = results_dir / "08_validation_final.xlsx"
+
+output_dir = results_dir / "09_1_MLR"
+output_dir.mkdir(exist_ok=True)
+
+features = [
+    "a", "b", "c", "V",
+    "concentration",
+    "Layer",
+    "valence_electron",
+    "IQE",
+]
+
+target = "Lifetime"
+
+train_df = pd.read_excel(train_path)
+val_df = pd.read_excel(val_path)
+
+X_train = train_df[features]
+y_train = train_df[target].to_numpy()
+
+X_val = val_df[features]
+y_val = val_df[target].to_numpy()
+
+
+def evaluate(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+
+    mask = y_true != 0
+    mape = np.mean(
+        np.abs((y_pred[mask] - y_true[mask]) / y_true[mask])
+    )
+
+    return {
+        "MAE": mae,
+        "MSE": mse,
+        "MAPE": mape,
+        "RMSE": rmse,
+        "R2": r2,
+    }
+
+
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+pred = model.predict(X_val)
+metrics = evaluate(y_val, pred)
+
+result = pd.DataFrame([{
+    "Model": "MLR",
+    **metrics,
+}])
+
+print(result.to_string(index=False))
+
+result.to_excel(
+    output_dir / "09_1_MLR_metrics.xlsx",
+    index=False,
+)
+
+prediction_df = val_df.copy()
+prediction_df["Pred_MLR"] = pred
+prediction_df.to_excel(
+    output_dir / "09_1_MLR_predictions.xlsx",
+    index=False,
+)
+
+joblib.dump(
+    model,
+    output_dir / "09_1_MLR.joblib",
+)
+
+
+def plot_result(y_true, y_pred, save_path, border_color):
+    fig, ax = plt.subplots(figsize=(6.3, 5.2))
+
+    scatter = ax.scatter(
+        y_true, y_pred,
+        c=y_true,
+        cmap="RdYlGn",
+        s=26,
+        edgecolors="none",
+    )
+
+    slope, intercept = np.polyfit(y_true, y_pred, 1)
+    x_line = np.linspace(y_true.min(), y_true.max(), 300)
+    ax.plot(
+        x_line,
+        slope * x_line + intercept,
+        color="#5F6B73",
+        linewidth=1.6,
+    )
+
+    r2 = r2_score(y_true, y_pred)
+    sign = "+" if intercept >= 0 else "-"
+
+    ax.text(
+        0.05, 0.95,
+        f"Num = {len(y_true)}\n"
+        f"y = {slope:.3f}x {sign} {abs(intercept):.3f}\n"
+        f"R$^2$ = {r2:.5f}",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=10,
+    )
+
+    ax.set_xlabel("true data")
+    ax.set_ylabel("predicted data")
+    ax.tick_params(direction="in", top=True, right=True)
+    ax.grid(alpha=0.25)
+
+    inset = ax.inset_axes([0.59, 0.20, 0.29, 0.23])
+    sample = np.arange(1, len(y_true) + 1)
+
+    inset.plot(sample, y_true, "--", linewidth=0.8, label="True value")
+    inset.plot(sample, y_pred, linewidth=0.8, label="Fit value")
+    inset.tick_params(labelsize=6, direction="in")
+    inset.legend(fontsize=5, frameon=False)
+
+    handles = [
+        Line2D(
+            [0], [0],
+            marker="o",
+            linestyle="None",
+            markerfacecolor="#B0002B",
+            markeredgecolor="#B0002B",
+            markersize=6,
+            label="true-predict data",
+        ),
+        Line2D(
+            [0], [0],
+            color="#5F6B73",
+            linewidth=1.6,
+            label="Fit data",
+        ),
+    ]
+
+    ax.legend(
+        handles=handles,
+        loc="lower right",
+        fontsize=9,
+        frameon=True,
+        fancybox=False,
+        edgecolor="black",
+    )
+
+    cbar = fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.025)
+    cbar.set_ticks([
+        y_true.max(),
+        (y_true.max() + y_true.min()) / 2,
+        y_true.min(),
+    ])
+    cbar.set_ticklabels(["H", "M", "L"])
+
+    border = FancyBboxPatch(
+        (-0.12, -0.13),
+        1.25, 1.22,
+        transform=ax.transAxes,
+        boxstyle="round,pad=0.02,rounding_size=0.08",
+        fill=False,
+        edgecolor=border_color,
+        linewidth=2,
+        linestyle=(0, (5, 4)),
+        clip_on=False,
+    )
+    ax.add_patch(border)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
+plot_result(
+    y_val,
+    pred,
+    output_dir / "09_1_MLR.png",
+    "red",
+)
